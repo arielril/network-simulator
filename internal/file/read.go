@@ -2,6 +2,7 @@ package file
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 )
 
@@ -9,7 +10,9 @@ func Read(path string) []string {
 	file, err := os.Open(path)
 	defer file.Close()
 	if err != nil {
-		panic("Failed to open file")
+		panic(
+			fmt.Sprintf("Failed to open file: %v", err),
+		)
 	}
 
 	scanner := bufio.NewScanner(file)

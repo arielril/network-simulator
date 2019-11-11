@@ -1,11 +1,9 @@
 package file
 
 import (
-	"fmt"
+	. "github.com/arielril/network-simulator/internal/network"
 )
 
-func Parse(lines []string) {
-	for i, line := range lines {
-		fmt.Printf("Line %d: %v\n", i+1, line)
-	}
+func Parse(lines []string) *Network {
+	return &Network{}
 }
