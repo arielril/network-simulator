@@ -100,3 +100,16 @@ r1 => n1 : ETH (src=00:00:00:00:00:05 dst=00:00:00:00:00:01) \n IP (src=192.168.
 r1 => n1 : ETH (src=00:00:00:00:00:05 dst=00:00:00:00:00:01) \n IP (src=192.168.1.2 dst=192.168.0.2 ttl=7 mf=0 off=5) \n ICMP - Echo reply (data=world);
 n1 rbox n1 : Received helloworld;
 ```
+
+## Construction details
+
+- TTL inicial dos pacotes IP deve ser igual a 8
+- o simulador deverá suportar o uso de subredes na composição da topologia
+- a topologia poderá apresentar loops no roteamento (deve finalizar com ICMP Time Exceeded)
+- a tabela de roteamento pode conter uma rota default representada por 0.0.0.0/0
+- o parâmetro mf corresponde à flag More Fragments do IP (pode conter 0 ou 1)
+- o parâmetro off corresponde ao campo Offset do IP - deve indicar onde inicia o fragmento em número de bytes
+- o simulador deve ser executado a partir de um terminal por linha de comando de acordo com o exemplo apresentado - não deve ser necessário utilizar uma IDE para executar o simulador!!!
+- o simulador pode ser implementado em qualquer linguagem
+- a entrada e saída devem respeitar EXATAMENTE os formatos apresentados
+- o formato de saída é baseado na linguagem MsGenny. Sugere-se verificar se a saída está correta através [deste site](https://sverweij.github.io/mscgen_js). Usar o cabeçalho **“wordwraparcs=true,hscale=2.5;”** para facilitar a visualização.

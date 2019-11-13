@@ -2,7 +2,7 @@ package component
 
 type Node struct {
 	Name     string
-	Ip       IP
+	NetInt   NetInterface
 	Gateway  IP
 	ArpTable interface{}
 }

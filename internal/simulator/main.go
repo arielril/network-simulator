@@ -21,8 +21,12 @@ func Run(ctx *cli.Context) error {
 	fileR := file.Read(filePath)
 	net := file.Parse(fileR)
 
-	srcNode := component.Node{ctx.Args().Get(1)}
-	destNode := component.Node{ctx.Args().Get(2)}
+	srcNode := component.Node{
+		Name: ctx.Args().Get(1),
+	}
+	destNode := component.Node{
+		Name: ctx.Args().Get(2),
+	}
 	message := ctx.Args().Get(3)
 
 	net.SendMsg(srcNode, destNode, message)

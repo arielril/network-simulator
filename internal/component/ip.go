@@ -52,3 +52,30 @@ func (ip IP) IsSameNet(ipDest IP) bool {
 
 	return ipDestBit >= fst && ipDestBit <= snd
 }
+
+type IpPacket struct {
+	IpSrc  IP
+	MacSrc string
+	IpDst  IP
+	MacDst string
+	ttl    uint8
+	mf     uint8
+	off    uint32
+	data   string
+}
+
+// Creates a new IpPacket with default values
+func NewIpPacket(src, dst NetInterface, msg string) IpPacket {
+	packet := IpPacket{
+		IpSrc:  src.Ip,
+		MacSrc: src.Mac,
+		IpDst:  dst.Ip,
+		MacDst: dst.Mac,
+		ttl:    8,
+		mf:     0,
+		off:    0,
+		data:   msg,
+	}
+
+	return packet
+}
