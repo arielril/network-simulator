@@ -1,7 +1,10 @@
 package simulator
 
 import (
+	"fmt"
 	"path/filepath"
+
+	"github.com/arielril/network-simulator/internal/network"
 
 	"github.com/arielril/network-simulator/internal/component"
 
@@ -19,7 +22,10 @@ func Run(ctx *cli.Context) error {
 
 	filePath, _ := filepath.Abs(topologyFile)
 	fileR := file.Read(filePath)
-	net := file.Parse(fileR)
+
+	net := network.CreateNetwork(fileR)
+	fmt.Println(net.Nodes)
+	fmt.Println(net.Routers)
 
 	srcNode := component.Node{
 		Name: ctx.Args().Get(1),

@@ -3,7 +3,8 @@ package file
 import (
 	"fmt"
 
-	. "github.com/arielril/network-simulator/internal/network"
+	"github.com/arielril/network-simulator/internal/component"
+
 	fp "github.com/novalagung/gubrak"
 )
 
@@ -20,23 +21,34 @@ func findLabelIndex(lb string, list []string) (int, error) {
 }
 
 // Create nodes from parsed file
-func createNodes(lines []string) {
+func CreateNodes(lines []string) []component.Node {
 	startIdx, _ := findLabelIndex(NODE_LABEL, lines)
 	fmt.Println("Node idx:", startIdx)
+
+	l := make([]component.Node, 1)
+	l[0] = component.Node{
+		Name: "Node",
+	}
+	return l
 }
 
 // Create the router table for the router from parsed file
-func createRouterTable(lines []string, routerName string) {
-	startIdx, _ := findLabelIndex(ROUTER_LABEL, lines)
+func CreateRouterTable(lines []string, router string) component.RouterTable {
+	startIdx, _ := findLabelIndex(ROUTER_TABLE_LABEL, lines)
 	fmt.Println("Router Table idx:", startIdx)
+	return component.RouterTable{
+		Name: "RouterTable",
+	}
 }
 
 // Create routers from parsed file
-func createRouters(lines []string) {
+func CreateRouters(lines []string) []component.Router {
 	startIdx, _ := findLabelIndex(ROUTER_LABEL, lines)
 	fmt.Println("Router idx:", startIdx)
-}
 
-func Parse(lines []string) *Network {
-	return &Network{}
+	l := make([]component.Router, 1)
+	l[0] = component.Router{
+		Name: "Router",
+	}
+	return l
 }
