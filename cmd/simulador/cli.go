@@ -26,9 +26,9 @@ func getCliApp() *cli.App {
 
 func main() {
 	app := getCliApp()
-	apperr := app.Run(os.Args)
+	appErr := app.Run(os.Args)
 
-	if apperr != nil {
-		panic(fmt.Sprintf("Failed to run cli: %v", apperr))
+	if appErr != nil {
+		panic(fmt.Sprintf("Failed to run cli: %v", appErr))
 	}
 }

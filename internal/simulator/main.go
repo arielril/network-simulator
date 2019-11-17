@@ -1,10 +1,12 @@
 package simulator
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 
 	"github.com/arielril/network-simulator/internal/network"
+	"github.com/asaskevich/govalidator"
 
 	"github.com/arielril/network-simulator/internal/component"
 
@@ -17,23 +19,53 @@ var (
 	ip2 string = "192.168.1.3"
 )
 
-func Run(ctx *cli.Context) error {
-	topologyFile := ctx.Args().First()
+type InputArgs struct {
+	topology string `valid:"alphanum"`
+	srcNode  string `valid:"alphanum"`
+	dstNode  string `valid:"alphanumn"`
+	msg      string `valid:"ascii"`
+}
 
-	filePath, _ := filepath.Abs(topologyFile)
+func validateInputeArgs(args *InputArgs, ctx *cli.Context) error {
+	if !ctx.Args().Present() {
+		return errors.New("Invalid simulator arguments")
+	}
+
+	args.topology = ctx.Args().Get(0)
+	args.srcNode = ctx.Args().Get(1)
+	args.dstNode = ctx.Args().Get(2)
+	args.msg = ctx.Args().Get(3)
+
+	_, err := govalidator.ValidateStruct(args)
+
+	if err != nil {
+		return errors.New(
+			fmt.Sprintf("Falied to parse args: %v", err),
+		)
+	}
+
+	return nil
+}
+
+func Run(ctx *cli.Context) error {
+	args := &InputArgs{}
+
+	validateInputeArgs(args, ctx)
+
+	filePath, _ := filepath.Abs(args.topology)
 	fileR := file.Read(filePath)
 
 	net := network.CreateNetwork(fileR)
-	fmt.Println(net.Nodes)
-	fmt.Println(net.Routers)
+	fmt.Println("nodes:", net.Nodes)
+	fmt.Println("routers:", net.Routers)
 
 	srcNode := component.Node{
-		Name: ctx.Args().Get(1),
+		Name: args.srcNode,
 	}
 	destNode := component.Node{
-		Name: ctx.Args().Get(2),
+		Name: args.dstNode,
 	}
-	message := ctx.Args().Get(3)
+	message := args.msg
 
 	net.SendMsg(srcNode, destNode, message)
 
