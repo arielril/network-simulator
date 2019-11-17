@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strings"
+
+	fp "github.com/novalagung/gubrak"
 )
 
 func Read(path string) []string {
@@ -22,6 +25,9 @@ func Read(path string) []string {
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
+
+	mapped, _ := fp.Map(lines, strings.ToUpper)
+	lines = mapped.([]string)
 
 	return lines
 }

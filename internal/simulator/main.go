@@ -11,6 +11,7 @@ import (
 	"github.com/arielril/network-simulator/internal/component"
 
 	"github.com/arielril/network-simulator/internal/file"
+	fp "github.com/novalagung/gubrak"
 	"github.com/urfave/cli"
 )
 
@@ -47,6 +48,16 @@ func validateInputeArgs(args *InputArgs, ctx *cli.Context) error {
 	return nil
 }
 
+func findNodeByName(nodes []component.Node) func(string) component.Node {
+	return func(name string) component.Node {
+		nd, _ := fp.Find(nodes, func(node component.Node) bool {
+			return node.Name == name
+		})
+
+		return nd.(component.Node)
+	}
+}
+
 func Run(ctx *cli.Context) error {
 	args := &InputArgs{}
 
@@ -54,20 +65,16 @@ func Run(ctx *cli.Context) error {
 
 	filePath, _ := filepath.Abs(args.topology)
 	fileR := file.Read(filePath)
-
 	net := network.CreateNetwork(fileR)
-	fmt.Println("nodes:", net.Nodes)
-	fmt.Println("routers:", net.Routers)
 
-	srcNode := component.Node{
-		Name: args.srcNode,
-	}
-	destNode := component.Node{
-		Name: args.dstNode,
-	}
+	findNode := findNodeByName(net.Nodes)
+
+	srcNode := findNode(args.srcNode)
+	dstNode := findNode(args.srcNode)
+
 	message := args.msg
 
-	net.SendMsg(srcNode, destNode, message)
+	net.SendMsg(srcNode, dstNode, message)
 
 	return nil
 }

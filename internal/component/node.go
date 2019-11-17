@@ -4,7 +4,7 @@ type Node struct {
 	Name     string
 	NetInt   NetInterface
 	Gateway  IP
-	ArpTable interface{}
+	ArpTable ArpTable
 }
 
 type INode interface {

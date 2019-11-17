@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	. "github.com/novalagung/gubrak"
+	fp "github.com/novalagung/gubrak"
 )
 
 const MASK uint32 = 0xffffffff
@@ -18,10 +18,15 @@ type IP struct {
 type IPInterface interface {
 	ToBit() uint32
 	IsSameNet(ipDest IP) bool
+	ToString() string
+}
+
+func (ip IP) ToString() string {
+	return fmt.Sprintf("%v/%v", ip.Ip, ip.Prefix)
 }
 
 func (ip IP) ToBit() uint32 {
-	list, err := Map(
+	list, err := fp.Map(
 		strings.Split(ip.Ip, "."),
 		func(part string) uint64 {
 			val, _ := strconv.ParseUint(part, 10, 32)

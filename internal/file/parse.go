@@ -1,7 +1,6 @@
 package file
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -42,7 +41,7 @@ func getNode(line string) component.Node {
 
 	mtu, _ := strconv.ParseUint(ln[3], 10, 8)
 	return component.Node{
-		Name:    strings.ToUpper(ln[0]),
+		Name:    ln[0],
 		Gateway: getIp(ln[4]),
 		NetInt: component.NetInterface{
 			Mac: ln[1],
@@ -68,28 +67,89 @@ func CreateNodes(lines []string) []component.Node {
 	return nodeList
 }
 
-// Create the router table for the router from parsed file
-func CreateRouterTable(lines []string, router string) component.RouterTable {
+func getRouterTableLines(lines []string) []string {
 	startIdx, _ := findLabelIndex(ROUTER_TABLE_LABEL, lines)
-	fmt.Println("Router Table idx:", startIdx)
-	return component.RouterTable{
-		Name: "RouterTable",
+
+	routerTableLines := make([]string, 0)
+	for i := startIdx + 1; i < len(lines); i++ {
+		if strings.Contains(lines[i], "#") {
+			break
+		}
+		routerTableLines = append(routerTableLines, lines[i])
 	}
+	return routerTableLines
+}
+
+// Create the router table for the router from parsed file
+func CreateRouterTable(lines []string, router component.Router) map[component.IP]component.RouterTableEntry {
+	routerTableLines := getRouterTableLines(lines)
+
+	mappedLines, _ := fp.Map(
+		routerTableLines,
+		func(line string) []string {
+			return strings.Split(line, ",")
+		},
+	)
+
+	goodValues, _ := fp.Filter(
+		mappedLines,
+		func(line []string) bool {
+			return line[0] == router.Name
+		},
+	)
+
+	rt := make(map[component.IP]component.RouterTableEntry, len(goodValues.([][]string)))
+
+	for _, val := range goodValues.([][]string) {
+		port, _ := strconv.ParseUint(val[3], 10, 8)
+		entry := component.RouterTableEntry{
+			NetDest: getIp(val[1]),
+			Nexthop: getIp(val[2]),
+			Port:    uint8(port),
+		}
+		rt[entry.NetDest] = entry
+	}
+
+	return rt
+}
+
+func getPortList(qty uint8, ports []string) []component.Port {
+	var portList []component.Port = make([]component.Port, qty)
+
+	for i := 0; i < int(qty)*3; i += 3 {
+		portNumber := i / 3
+
+		mac := ports[i]
+		ippref := ports[i+1]
+		mtu, _ := strconv.ParseUint(ports[i+2], 10, 8)
+
+		port := component.Port{
+			Number: uint8(portNumber),
+			NetInterface: component.NetInterface{
+				Ip:  getIp(ippref),
+				Mac: mac,
+				Mtu: uint8(mtu),
+			},
+		}
+		portList[portNumber] = port
+	}
+
+	return portList
 }
 
 func getRouter(line string) component.Router {
-	// <router_name>,<num_ports>,<MAC0>,<IP0/prefix>,<MTU0>,<MAC1>,<IP1/prefix>,<MTU1>,<MAC2>,<IP2/prefix>,<MTU2> …
 	ln := strings.Split(line, ",")
+	numPorts, _ := strconv.ParseUint(ln[1], 10, 8)
 
 	return component.Router{
-		Name: strings.ToUpper(ln[0]),
+		Name:     ln[0],
+		PortList: getPortList(uint8(numPorts), ln[1:]),
 	}
 }
 
 // Create routers from parsed file
 func CreateRouters(lines []string) []component.Router {
 	startIdx, _ := findLabelIndex(ROUTER_LABEL, lines)
-	fmt.Println("Router idx:", startIdx)
 
 	routerList := make([]component.Router, 0)
 	for i := startIdx + 1; i < len(lines); i++ {

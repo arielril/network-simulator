@@ -1,15 +1,17 @@
 package component
 
-type RouterTable struct {
-	Name string
+type Port struct {
+	Number uint8
+	NetInterface
 }
+
 type Router struct {
 	Name        string
 	Ip          IP
 	Gateway     IP
 	ArpTable    struct{}
-	PortList    []struct{}
-	RouterTable RouterTable
+	PortList    []Port
+	RouterTable map[IP]RouterTableEntry
 }
 
 type IRouter interface {
@@ -25,7 +27,7 @@ func (n Router) ReceiveArp()  {}
 func (n Router) SendIcmp()    {}
 func (n Router) ReceiveIcmp() {}
 
-func (r Router) SetRouterTable(rt RouterTable) Router {
+func (r Router) SetRouterTable(rt map[IP]RouterTableEntry) Router {
 	r.RouterTable = rt
 	return r
 }
