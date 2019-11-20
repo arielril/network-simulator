@@ -17,6 +17,7 @@ const (
 	NODE_LABEL         string = "#NODE"
 	ROUTER_LABEL       string = "#ROUTER"
 	ROUTER_TABLE_LABEL string = "#ROUTERTABLE"
+	MASK               uint32 = 0xFFFFFFFF
 )
 
 type MAC string
@@ -26,9 +27,19 @@ type IP struct {
 	prefix uint8
 }
 
+func NewIp(ip string) *IP {
+	ipSplit := strings.Split(ip, "/")
+	ipPref, _ := strconv.ParseUint(ipSplit[1], 10, 8)
+	netIp := &IP{
+		ip:     ipSplit[0],
+		prefix: uint8(ipPref),
+	}
+	return netIp
+}
+
 func (ip IP) ToBit() uint32 {
 	list, err := fp.Map(
-		strings.Split(ip.Ip, "."),
+		strings.Split(ip.ip, "."),
 		func(part string) uint64 {
 			val, _ := strconv.ParseUint(part, 10, 32)
 			return val
@@ -53,10 +64,17 @@ func (ip IP) ToBit() uint32 {
 func (ip IP) IsSameNet(ipDest IP) bool {
 	ipSrcBit := ip.ToBit()
 	ipDestBit := ipDest.ToBit()
-	fst := MASK & (ipSrcBit & (MASK << (32 - ip.Prefix)))
-	snd := MASK & (fst | (MASK >> ip.Prefix))
+	fst := MASK & (ipSrcBit & (MASK << (32 - ip.prefix)))
+	snd := MASK & (fst | (MASK >> ip.prefix))
 
 	return ipDestBit >= fst && ipDestBit <= snd
+}
+
+func (ip IP) ToString() string {
+	return fmt.Sprintf(
+		"%v/%v",
+		ip.ip, ip.prefix,
+	)
 }
 
 type netInterface struct {
@@ -174,12 +192,9 @@ type node struct {
 func NewNode(name, ip, gateway string, mac MAC, mtu MTU) *node {
 	ipSplit := strings.Split(ip, "/")
 	ipPref, _ := strconv.ParseUint(ipSplit[1], 10, 8)
-	netIp := IP{
-		ip:     ipSplit[0],
-		prefix: uint8(ipPref),
-	}
+	netIp := NewIp(ip)
 	netInt := netInterface{
-		ip:  netIp,
+		ip:  *netIp,
 		mac: mac,
 		mtu: mtu,
 	}
@@ -198,7 +213,21 @@ func NewNode(name, ip, gateway string, mac MAC, mtu MTU) *node {
 }
 
 // Sends the msg to the dst node
-func (n *node) SendMsg(msg string, dst *node, env environment) {
+func (n *node) SendMsg(msg string, dst *node, env environment) error {
+	isSameNet := n.netPort.ip.IsSameNet(dst.netPort.ip)
+
+	if !isSameNet {
+		xpto := env.GetDefaultGateway(n)
+		fmt.Printf("\nNew destination %v\n\n", xpto)
+		return nil
+		// return errors.New(
+		// 	fmt.Sprintf(
+		// 		"%v (%v) isn't the same net of %v (%v)\n",
+		// 		dst.name, dst.netPort.ip.ToString(), n.name, n.netPort.ip.ToString(),
+		// 	),
+		// )
+	}
+
 	_, hasMac := n.arpTable[dst.netPort.ip]
 
 	if !hasMac {
@@ -210,6 +239,7 @@ func (n *node) SendMsg(msg string, dst *node, env environment) {
 	pkt := createIcmpReq(n, dst, msg)
 	icmpReply := env.SendIcmpReq(pkt, dst)
 	n.ReceiveIcmpReq(icmpReply)
+	return nil
 }
 
 func (n *node) ReceiveArpRequest(pkt packet) {
@@ -250,8 +280,58 @@ func (n *node) ReplyIcmpRequest(pkt packet) packet {
 	return reply
 }
 
+type routerTableEntry struct {
+	netdest IP
+	nexthop IP
+	port    uint8
+}
+
+type routerPort struct {
+	number uint8
+	netInterface
+}
+
+func NewRouterPort(number uint8, ip string, mac MAC, mtu MTU) *routerPort {
+	netIp := NewIp(ip)
+	netInt := netInterface{
+		mac: mac,
+		mtu: mtu,
+		ip:  *netIp,
+	}
+	port := &routerPort{
+		number,
+		netInt,
+	}
+	return port
+}
+
+type router struct {
+	// Name of the router
+	name string
+	// List of ports of the router
+	ports []routerPort
+	// Router Table
+	routerTable []*routerTableEntry
+}
+
+func NewRouter(name string) *router {
+	ports := make([]routerPort, 0)
+	routerTb := make([]*routerTableEntry, 0)
+	rt := &router{
+		name:        name,
+		ports:       ports,
+		routerTable: routerTb,
+	}
+	return rt
+}
+
+func (r *router) AddPort(port routerPort) {
+	r.ports = append(r.ports, port)
+}
+
 type environment struct {
-	nodes []*node
+	nodes   []*node
+	routers []*router
 }
 
 func NewEnvironment() environment {
@@ -264,6 +344,10 @@ func NewEnvironment() environment {
 
 func (e *environment) AddNode(nd *node) {
 	e.nodes = append(e.nodes, nd)
+}
+
+func (e *environment) AddRouter(rt *router) {
+	e.routers = append(e.routers, rt)
 }
 
 func (e *environment) GetNodeByName(name string) *node {
@@ -308,6 +392,17 @@ func (e *environment) SendIcmpReq(pkt packet, dst *node) packet {
 	return icmpRep
 }
 
+func (e *environment) GetDefaultGateway(n *node) *router {
+	for _, rt := range e.routers {
+		for _, p := range rt.ports {
+			if p.ip == n.gateway {
+				return rt
+			}
+		}
+	}
+	return nil
+}
+
 func findLabelIndex(lb string, list []string) (int, error) {
 	return fp.FindIndex(list, func(val string) bool {
 		return val == lb
@@ -322,13 +417,41 @@ func parseNode(line string) *node {
 	return NewNode(l[0], l[2], l[4], mac, MTU(mtu))
 }
 
+func parseRouter(line string) *router {
+	l := strings.Split(line, ",")
+	numPorts, _ := strconv.ParseUint(l[1], 10, 8)
+
+	rt := NewRouter(l[0])
+
+	portLine := l[2:]
+	for i := 0; i < int(numPorts)*3; i += 3 {
+		mtu, _ := strconv.ParseUint(portLine[i+2], 10, 8)
+		rt.AddPort(
+			*NewRouterPort(
+				uint8(i/3), portLine[i+1], MAC(portLine[i]), MTU(mtu),
+			),
+		)
+	}
+
+	return rt
+}
+
 func (e *environment) ParseLines(lines []string) {
 	nodeIdx, _ := findLabelIndex(NODE_LABEL, lines)
-	for i := nodeIdx + 1; i < len(lines); i++ {
+	lenLines := len(lines)
+	for i := nodeIdx + 1; i < lenLines; i++ {
 		if strings.Contains(lines[i], "#") {
 			break
 		}
 		e.AddNode(parseNode(lines[i]))
+	}
+
+	routerIdx, _ := findLabelIndex(ROUTER_LABEL, lines)
+	for i := routerIdx + 1; i < lenLines; i++ {
+		if strings.Contains(lines[i], "#") {
+			break
+		}
+		e.AddRouter(parseRouter(lines[i]))
 	}
 }
 
@@ -347,7 +470,5 @@ func Run(ctx *cli.Context) error {
 	src := env.GetNodeByName(args.SrcNode)
 	dst := env.GetNodeByName(args.DstNode)
 
-	src.SendMsg(args.Msg, dst, env)
-
-	return nil
+	return src.SendMsg(args.Msg, dst, env)
 }
