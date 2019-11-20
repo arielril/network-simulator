@@ -32,36 +32,55 @@ type INetwork interface {
  * 3.1 ...
 */
 // Sends a message from srcNode to dstNode
-func (net Network) SendMsg(srcNode, dstNode Node, msg string) {
-	dstIp := dstNode.NetInt.Ip
+// func (net Network) SendMsg(srcNode, dstNode Node, msg string) {
+// 	arp, icmp := srcNode.SendMsg(dstNode, msg)
 
-	// assuming is the same net
-	// find dstNode in the srcNode arp table
-	dstMac := srcNode.ArpTable.GetDestination(dstIp) // this returns the dst mac address
+// 	if arp != nil {
+// 		// * the dst node must answer the arp request
+// 	} else if icmp != nil {
+// 		// * the dst node must receive the icmp request
+// 	}
 
-	// has the dstNode inside the arp table
-	if dstMac != "" {
-		srcNode.SendIcmp(dstIp, dstMac, msg)
-		return
-	}
+// 	dstIp := dstNode.NetInt.Ip
 
-	// doesn't have the dstNode in the arp table
-	err := net.SendArp(srcNode, dstIp)
+// 	// assuming is the same net
+// 	// find dstNode in the srcNode arp table
+// 	dstMac := srcNode.ArpTable.GetDestination(dstIp)
 
-	if err != nil {
-		panic("Failed to find dstNode from srcNode")
-	}
+// 	// has the dstNode inside the arp table
+// 	if dstMac != "" {
+// 		// srcNode.SendIcmp(dstIp, dstMac, msg)
+// 		return
+// 	}
 
-	dstMac = srcNode.ArpTable.GetDestination(dstIp)
-	srcNode.SendIcmp(dstMac, msg)
-	return
+// 	// doesn't have the dstNode in the arp table
+// 	// err := net.ReqArp(srcNode, dstNode)
+
+// 	if err != nil {
+// 		panic("Failed to find dstNode from srcNode")
+// 	}
+
+// 	dstMac = srcNode.ArpTable.GetDestination(dstIp)
+// 	// srcNode.SendIcmp(dstMac, msg)
+// 	return
+// }
+
+func (net Network) ReqArp(srcNode Node, dstNode Node) {
+	// if dstMac == "" {
+	// dstMac = "0xFFFFFFFF"
+	// }
+
+	// send arp request
+	// fmt.Printf(
+	// 	"%v box %v : ETH (src=%v dst =%v) \n ARP - Who has %v? Tell %v;",
+	// 	srcNode.Name, srcNode.Name, srcNode.NetInt.Mac, dstMac, dstIp, srcNode.NetInt.Ip.ToString(),
+	// )
 }
 
-func (net Network) SendArp(src Node, dstIp IP) {
-	// send arp request
+func (net Network) ResArp(srcName, srcIp, srcMac, dstName, dstIp, dstMac string) {
 	fmt.Printf(
-		"%v box %v : ETH (src=%v dst =0xFFFFFFFF) \n ARP - Who has %v? Tell %v;",
-		src.Name, src.Name, src.NetInt.Mac, dstIp.ToString(), src.NetInt.Ip.ToString(),
+		"%v => %v : ETH (src=%v dst=%v) \n ARP - %v is at %v;",
+		srcName, dstName, srcMac, dstMac, srcIp, srcMac,
 	)
 }
 
@@ -86,4 +105,22 @@ func CreateNetwork(fileLines []string) Network {
 		Nodes:   nodes,
 		Routers: routers,
 	}
+}
+
+func (n Network) SendMsg(src, dst Node, msg string) {
+	has := src.HasDestination(dst)
+
+	if has {
+		icmpPacket := src.CreateIcmpPacket(msg, dst)
+		dst.ReceiveIcmpPacket(icmpPacket)
+	} else {
+		arpReqPacket := src.CreateArpReq(false, dst)
+		dst.ReceiveArpPacket(arpReqPacket)
+		arpResPacket := dst.CreateArpReq(true, src)
+		src.ReceiveArpPacket(arpResPacket)
+	}
+}
+
+func (n Network) Send(src, dst Node, msg string) {
+
 }

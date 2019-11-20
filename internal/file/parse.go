@@ -36,6 +36,13 @@ func getIp(str string) component.IP {
 	}
 }
 
+func createArpTb() component.ArpTable {
+	tb := make(map[component.IP]string, 0)
+	return component.ArpTable{
+		Table: tb,
+	}
+}
+
 func getNode(line string) component.Node {
 	ln := strings.Split(line, ",")
 
@@ -48,6 +55,7 @@ func getNode(line string) component.Node {
 			Ip:  getIp(ln[2]),
 			Mtu: uint8(mtu),
 		},
+		ArpTable: createArpTb(),
 	}
 }
 
