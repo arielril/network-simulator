@@ -20,7 +20,17 @@ const (
 	MASK               uint32 = 0xFFFFFFFF
 )
 
+type packetType uint8
+
+const (
+	ARP_REQ packetType = iota + 1
+	ARP_REP
+	ICMP_REQ
+	ICMP_REP
+)
+
 var lastIcmpPacket packet
+var globalSrcNode NetComponent
 
 type MAC string
 type MTU uint8
@@ -106,12 +116,18 @@ type packet struct {
 	ttl  uint8
 	mf   uint8
 	off  uint8
+	typ  packetType
 }
 
-func NewPacket(src, dst packetHost) packet {
+func NewPacket(src, dst packetHost, typ packetType, data string, ttl, mf, off uint8) packet {
 	pkt := packet{
-		src: src,
-		dst: dst,
+		src:  src,
+		dst:  dst,
+		typ:  typ,
+		data: data,
+		ttl:  ttl,
+		mf:   mf,
+		off:  off,
 	}
 	return pkt
 }
@@ -126,11 +142,7 @@ func createBroadcastArpReq(srcName string, srcNetPort netInterface, ipDst IP) pa
 		ip:  ipDst,
 		mac: UNKOWN_MAC,
 	}
-	pkt := packet{
-		src: srcHost,
-		dst: dstHost,
-	}
-	return pkt
+	return NewPacket(srcHost, dstHost, ARP_REP, "", 0, 0, 0)
 }
 
 func createIcmpReq(srcName, dstName string, srcNetPort, dstNetPort netInterface, data string) packet {
@@ -144,16 +156,7 @@ func createIcmpReq(srcName, dstName string, srcNetPort, dstNetPort netInterface,
 		ip:   dstNetPort.ip,
 		mac:  dstNetPort.mac,
 	}
-
-	pkt := packet{
-		src:  srcHost,
-		dst:  dstHost,
-		data: data,
-		ttl:  8,
-		mf:   0,
-		off:  0,
-	}
-	return pkt
+	return NewPacket(srcHost, dstHost, ICMP_REQ, data, 8, 0, 0)
 }
 
 func logArpReq(pkt packet) {
@@ -190,11 +193,12 @@ func logIcmpRep(pkt packet) {
 
 type NetComponent interface {
 	GetName() string
-	ReceiveArpRequest(pkt packet)
-	ReplyArpRequest(pkt packet) packet
-	ReceiveIcmpReply(pkt packet, env Environment)
-	ReplyIcmpRequest(pkt packet) packet
 	SendMessage(msg string, dest NetComponent, destNetInterface netInterface, env Environment)
+	SendArpReply(pkt packet) packet
+	ReceiveArpRequest(pkt packet)
+	SendIcmpReply(pkt packet) packet
+	ReceiveIcmpRequest(pkt packet, env Environment)
+	ReceiveIcmpReply(pkt packet, env Environment)
 }
 
 type Node interface {
@@ -251,57 +255,39 @@ func (n *node) ReceiveArpRequest(pkt packet) {
 	}
 }
 
-func (n *node) ReplyArpRequest(pkt packet) packet {
+func (n *node) SendArpReply(pkt packet) packet {
 	srcHost := packetHost{
 		name: n.name,
 		ip:   n.netPort.ip,
 		mac:  n.netPort.mac,
 	}
-	reply := packet{
-		src: srcHost,
-		dst: pkt.src,
-	}
-
-	return reply
+	return NewPacket(srcHost, pkt.src, ARP_REP, "", 8, 0, 0)
 }
 
-func (n *node) ReceiveIcmpReply(pkt packet, env Environment) {
-	// fmt.Printf("\nNode (%v)\nArp tb: %v\n\n", n.name, n.arpTable)
+func (n *node) ReceiveIcmpRequest(pkt packet, env Environment) {
 	fmt.Printf("%v rbox %v : Received %v;\n", n.name, n.name, pkt.data)
 }
 
-func (n *node) ReplyIcmpRequest(pkt packet) packet {
-	reply := packet{
-		src:  pkt.dst,
-		dst:  pkt.src,
-		data: pkt.data,
-		ttl:  8,
-		mf:   0,
-		off:  0,
-	}
-	return reply
+func (n *node) ReceiveIcmpReply(pkt packet, env Environment) {
+	fmt.Printf("%v rbox %v : Received %v;\n", n.name, n.name, pkt.data)
+}
+
+func (n *node) SendIcmpReply(pkt packet) packet {
+	return NewPacket(pkt.dst, pkt.src, ICMP_REP, pkt.data, 8, 0, 0)
 }
 
 func (n *node) SendMessage(msg string, dest NetComponent, destNetInterface netInterface, env Environment) {
 	isSameNet := n.netPort.ip.IsSameNet(destNetInterface.ip)
 
 	var dstNetPort netInterface
+	var dstName string
+	var arpTbIpSearch IP
 
-	// * this has duplicated code to make it easy to implement
 	if !isSameNet {
 		rt := env.GetDefaultGateway(n)
 		prt, _ := fp.Find(rt.ports, func(p routerPort) bool {
 			return p.ip == n.gateway
 		})
-
-		routerPortIp := (prt.(routerPort)).ip
-		_, hasMac := n.arpTable[routerPortIp]
-
-		if !hasMac {
-			pkt := createBroadcastArpReq(n.name, n.netPort, routerPortIp)
-			arpReply := env.SendArpReq(pkt)
-			n.ReceiveArpRequest(arpReply)
-		}
 
 		dstNetPort = netInterface{
 			ip:  destNetInterface.ip,
@@ -309,30 +295,30 @@ func (n *node) SendMessage(msg string, dest NetComponent, destNetInterface netIn
 			mtu: (prt.(routerPort)).mtu,
 		}
 
-		pkt := createIcmpReq(n.name, rt.name, n.netPort, dstNetPort, msg)
-		lastIcmpPacket = pkt
-		icmpReply := env.SendIcmpReq(pkt)
-		lastIcmpPacket = icmpReply
-		n.ReceiveIcmpReply(icmpReply, env)
-		return
+		dstName = rt.name
+		routerPortIp := (prt.(routerPort)).ip
+		arpTbIpSearch = routerPortIp
+	} else {
+		dstNetPort = destNetInterface
+		arpTbIpSearch = dstNetPort.ip
+		dstName = dest.GetName()
 	}
 
-	// * The destination is inside the same net
-	dstNetPort = destNetInterface
-
-	_, hasMac := n.arpTable[dstNetPort.ip]
+	_, hasMac := n.arpTable[arpTbIpSearch]
 
 	if !hasMac {
-		pkt := createBroadcastArpReq(n.name, n.netPort, dstNetPort.ip)
+		pkt := createBroadcastArpReq(n.name, n.netPort, arpTbIpSearch)
 		arpReply := env.SendArpReq(pkt)
 		n.ReceiveArpRequest(arpReply)
 	}
 
-	pkt := createIcmpReq(n.name, dest.GetName(), n.netPort, dstNetPort, msg)
+	pkt := createIcmpReq(n.name, dstName, n.netPort, dstNetPort, msg)
 	lastIcmpPacket = pkt
 	icmpReply := env.SendIcmpReq(pkt)
-	lastIcmpPacket = icmpReply
-	n.ReceiveIcmpReply(icmpReply, env)
+	if icmpReply != nil {
+		lastIcmpPacket = *icmpReply
+		n.ReceiveIcmpReply(*icmpReply, env)
+	}
 }
 
 type routerTableEntry struct {
@@ -417,7 +403,7 @@ func (r *router) GetPortByIp(ip IP) routerPort {
 	return rp.(routerPort)
 }
 
-func (r *router) ReplyArpRequest(pkt packet) packet {
+func (r *router) SendArpReply(pkt packet) packet {
 	dstIp := pkt.dst.ip
 	dstPort := r.GetPortByIp(dstIp)
 	srcHost := packetHost{
@@ -425,12 +411,12 @@ func (r *router) ReplyArpRequest(pkt packet) packet {
 		ip:   dstPort.ip,
 		mac:  dstPort.mac,
 	}
-	reply := packet{
-		src: srcHost,
-		dst: pkt.src,
-	}
+	return NewPacket(srcHost, pkt.src, ARP_REP, "", 8, 0, 0)
+}
 
-	return reply
+func (r *router) ReceiveIcmpRequest(pkt packet, env Environment) {
+	port := r.GetPortByMac(pkt.dst.mac)
+	_ = env.SendMessage(pkt.data, port.ip, pkt.dst.ip)
 }
 
 func (r *router) ReceiveIcmpReply(pkt packet, env Environment) {
@@ -438,22 +424,14 @@ func (r *router) ReceiveIcmpReply(pkt packet, env Environment) {
 	_ = env.SendMessage(pkt.data, port.ip, pkt.dst.ip)
 }
 
-func (r *router) ReplyIcmpRequest(pkt packet) packet {
+func (r *router) SendIcmpReply(pkt packet) packet {
 	port := r.GetPortByMac(pkt.dst.mac)
 	srcHost := packetHost{
 		name: r.name,
 		ip:   port.ip,
 		mac:  port.mac,
 	}
-	reply := packet{
-		src:  srcHost,
-		dst:  pkt.src,
-		data: pkt.data,
-		ttl:  8,
-		mf:   0,
-		off:  0,
-	}
-	return reply
+	return NewPacket(srcHost, pkt.src, ICMP_REP, pkt.data, 8, 0, 0)
 }
 
 func (r *router) SendMessage(msg string, dest NetComponent, destNetInterface netInterface, env Environment) {
@@ -485,19 +463,22 @@ func (r *router) SendMessage(msg string, dest NetComponent, destNetInterface net
 	pkt.ttl--
 	lastIcmpPacket = pkt
 	icmpReply := env.SendIcmpReq(pkt)
-	lastIcmpPacket = icmpReply
-	r.ReceiveIcmpReply(icmpReply, env)
+	if icmpReply != nil {
+		lastIcmpPacket = *icmpReply
+		r.ReceiveIcmpRequest(*icmpReply, env)
+	}
 }
 
 type Environment interface {
 	AddNode(nd *node)
 	AddRouter(r *router)
-	SendArpReq(pkt packet) packet
-	SendIcmpReq(pkt packet) packet
 	GetDefaultGateway(n *node) *router
-	ParseLines(lines []string)
-	SendMessage(msg string, ipSrc, ipDest IP) error
 	GetNetComponentByName(name string) NetComponent
+	ParseLines(lines []string)
+
+	SendMessage(msg string, ipSrc, ipDest IP) error
+	SendArpReq(pkt packet) packet
+	SendIcmpReq(pkt packet) *packet
 }
 
 type environment struct {
@@ -619,18 +600,22 @@ func (e *environment) SendArpReq(pkt packet) packet {
 	logArpReq(pkt)
 	dst := e.GetNetComponentByIp(pkt.dst.ip)
 	dst.ReceiveArpRequest(pkt)
-	arpReply := dst.ReplyArpRequest(pkt)
+	arpReply := dst.SendArpReply(pkt)
 	logArpRep(arpReply)
 	return arpReply
 }
 
-func (e *environment) SendIcmpReq(pkt packet) packet {
+func (e *environment) SendIcmpReq(pkt packet) *packet {
 	logIcmpReq(pkt)
 	dst := e.GetNetComponentByMac(pkt.dst.mac)
-	dst.ReceiveIcmpReply(pkt, e)
-	icmpRep := dst.ReplyIcmpRequest(pkt)
-	logIcmpRep(icmpRep)
-	return icmpRep
+	dst.ReceiveIcmpRequest(pkt, e)
+	// the origin component doesnt set the icmp reply
+	if dst.GetName() != globalSrcNode.GetName() {
+		icmpRep := dst.SendIcmpReply(pkt)
+		logIcmpRep(icmpRep)
+		return &icmpRep
+	}
+	return nil
 }
 
 func (e *environment) GetDefaultGateway(n *node) *router {
@@ -764,6 +749,7 @@ func Run(ctx *cli.Context) error {
 
 	src := env.GetNetComponentByName(args.SrcNode)
 	ipSrc := src.(Node).GetNetInterface()
+	globalSrcNode = src
 
 	dest := env.GetNetComponentByName(args.DstNode)
 	ipDest := dest.(Node).GetNetInterface()
