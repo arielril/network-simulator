@@ -70,6 +70,9 @@ n2 rbox n2 : Received helloworld;
 n2 => n1 : ETH (src=00:00:00:00:00:02 dst=00:00:00:00:00:01) \n IP (src=192.168.0.3 dst=192.168.0.2 ttl=8 mf=1 off=0) \n ICMP - Echo reply (data=hello);
 n2 => n1 : ETH (src=00:00:00:00:00:02 dst=00:00:00:00:00:01) \n IP (src=192.168.0.3 dst=192.168.0.2 ttl=8 mf=0 off=5) \n ICMP - Echo reply (data=world);
 n1 rbox n1 : Received helloworld;
+```
+
+```s
 $ simulador topologia.txt n1 n3 hello
 n1 box n1 : ETH (src=00:00:00:00:00:01 dst=FF:FF:FF:FF:FF:FF) \n ARP - Who has 192.168.0.1? Tell 192.168.0.2;
 r1 => n1 : ETH (src=00:00:00:00:00:05 dst=00:00:00:00:00:01) \n ARP - 192.168.0.1 is at 00:00:00:00:00:05;
