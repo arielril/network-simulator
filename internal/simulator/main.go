@@ -106,11 +106,11 @@ func NewPacket(src, dst packetHost) packet {
 	return pkt
 }
 
-func createBroadcastArpReq(src *node, ipDst IP) packet {
+func createBroadcastArpReq(srcName string, srcNetPort netInterface, ipDst IP) packet {
 	srcHost := packetHost{
-		name: src.name,
-		ip:   src.netPort.ip,
-		mac:  src.netPort.mac,
+		name: srcName,
+		ip:   srcNetPort.ip,
+		mac:  srcNetPort.mac,
 	}
 	dstHost := packetHost{
 		ip:  ipDst,
@@ -123,16 +123,16 @@ func createBroadcastArpReq(src *node, ipDst IP) packet {
 	return pkt
 }
 
-func createIcmpReq(src, dst *node, data string) packet {
+func createIcmpReq(srcName, dstName string, srcNetPort, dstNetPort netInterface, data string) packet {
 	srcHost := packetHost{
-		mac:  src.netPort.mac,
-		ip:   src.netPort.ip,
-		name: src.name,
+		mac:  srcNetPort.mac,
+		ip:   srcNetPort.ip,
+		name: srcName,
 	}
 	dstHost := packetHost{
-		name: dst.name,
-		ip:   dst.netPort.ip,
-		mac:  dst.netPort.mac,
+		name: dstName,
+		ip:   dstNetPort.ip,
+		mac:  dstNetPort.mac,
 	}
 
 	pkt := packet{
@@ -215,29 +215,44 @@ func NewNode(name, ip, gateway string, mac MAC, mtu MTU) *node {
 // Sends the msg to the dst node
 func (n *node) SendMsg(msg string, dst *node, env environment) error {
 	isSameNet := n.netPort.ip.IsSameNet(dst.netPort.ip)
+	var dstNetPort netInterface
 
 	if !isSameNet {
-		xpto := env.GetDefaultGateway(n)
-		fmt.Printf("\nNew destination %v\n\n", xpto)
+		rt := env.GetDefaultGateway(n)
+		prt, _ := fp.Find(rt.ports, func(p routerPort) bool {
+			return p.ip == n.gateway
+		})
+		dstNetPort = netInterface{
+			ip:  dst.netPort.ip,
+			mac: (prt.(routerPort)).mac,
+			mtu: (prt.(routerPort)).mtu,
+		}
+		_, hasMac := n.arpTable[dstNetPort.ip]
+
+		if !hasMac {
+			pkt := createBroadcastArpReq(n.name, n.netPort, dstNetPort.ip)
+			arpReply := env.SendArpReq(pkt)
+			n.ReceiveArpRequest(arpReply)
+		}
+
+		pkt := createIcmpReq(n.name, dst.name, n.netPort, dstNetPort, msg)
+		icmpReply := env.SendIcmpReq(pkt)
+		n.ReceiveIcmpReq(icmpReply)
 		return nil
-		// return errors.New(
-		// 	fmt.Sprintf(
-		// 		"%v (%v) isn't the same net of %v (%v)\n",
-		// 		dst.name, dst.netPort.ip.ToString(), n.name, n.netPort.ip.ToString(),
-		// 	),
-		// )
+	} else {
+		dstNetPort = dst.netPort
 	}
 
-	_, hasMac := n.arpTable[dst.netPort.ip]
+	_, hasMac := n.arpTable[dstNetPort.ip]
 
 	if !hasMac {
-		pkt := createBroadcastArpReq(n, dst.netPort.ip)
-		arpReply := env.SendArpReq(pkt, dst)
+		pkt := createBroadcastArpReq(n.name, n.netPort, dstNetPort.ip)
+		arpReply := env.SendArpReq(pkt)
 		n.ReceiveArpRequest(arpReply)
 	}
 
-	pkt := createIcmpReq(n, dst, msg)
-	icmpReply := env.SendIcmpReq(pkt, dst)
+	pkt := createIcmpReq(n.name, dst.name, n.netPort, dstNetPort, msg)
+	icmpReply := env.SendIcmpReq(pkt)
 	n.ReceiveIcmpReq(icmpReply)
 	return nil
 }
@@ -372,7 +387,7 @@ func (e *environment) GetNodeByMac(mac MAC) *node {
 	return nd.(*node)
 }
 
-func (e *environment) SendArpReq(pkt packet, dst *node) packet {
+func (e *environment) SendArpReq(pkt packet) packet {
 	logArpReq(pkt)
 	// if pkt.dst.mac == UNKOWN_MAC {
 	// }
@@ -383,11 +398,11 @@ func (e *environment) SendArpReq(pkt packet, dst *node) packet {
 	return arpReply
 }
 
-func (e *environment) SendIcmpReq(pkt packet, dst *node) packet {
+func (e *environment) SendIcmpReq(pkt packet) packet {
 	logIcmpReq(pkt)
-	dstNode := e.GetNodeByMac(pkt.dst.mac)
-	dstNode.ReceiveIcmpReq(pkt)
-	icmpRep := dstNode.ReplyIcmpRequest(pkt)
+	dst := e.GetNodeByMac(pkt.dst.mac)
+	dst.ReceiveIcmpReq(pkt)
+	icmpRep := dst.ReplyIcmpRequest(pkt)
 	logIcmpRep(icmpRep)
 	return icmpRep
 }
