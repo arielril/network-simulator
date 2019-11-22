@@ -33,3 +33,11 @@ func logIcmpReply(pkt packet) {
 		pkt.src.ip.ip, pkt.dst.ip.ip, pkt.ttl, pkt.mf, pkt.off, pkt.data,
 	)
 }
+
+func logIcmpTimeExceeded(pkt packet) {
+	fmt.Printf(
+		"%v => %v : ETH (src=%v dst=%v) \\n IP (src=%v dst=%v ttl=%v mf=%v off=%v) \\n ICMP - Time Exceeded;\n",
+		pkt.src.name, pkt.dst.name, pkt.src.mac, pkt.dst.mac,
+		pkt.src.ip.ip, pkt.dst.ip.ip, pkt.ttl, pkt.mf, pkt.off,
+	)
+}

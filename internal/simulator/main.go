@@ -30,6 +30,7 @@ const (
 	ARP_REP
 	ICMP_REQ
 	ICMP_REP
+	ICMP_TIME_EXCEEDED
 )
 
 type netInterface struct {
@@ -43,6 +44,7 @@ type netInterface struct {
 Packet implementation
 ----------------------------------------------------
 */
+
 type packetHost struct {
 	name string
 	mac  MAC
@@ -96,6 +98,7 @@ func createIcmpReq(srcName, dstName string, srcNetPort, dstNetPort netInterface,
 		ip:   dstNetPort.ip,
 		mac:  dstNetPort.mac,
 	}
+	// TODO fragment the packet depending on the mtu from srcNetPort
 	return NewPacket(srcHost, dstHost, ICMP_REQ, data, 8, 0, 0)
 }
 
@@ -104,6 +107,7 @@ func createIcmpReq(srcName, dstName string, srcNetPort, dstNetPort netInterface,
 Net component
 ----------------------------------------------------
 */
+
 type NetComponent interface {
 	GetName() string
 	SendArpReply(pkt packet) packet
@@ -111,6 +115,7 @@ type NetComponent interface {
 	SendIcmpReply(pkt packet, env Environment) packet
 	ReceiveIcmpRequest(pkt packet, env Environment) bool
 	ReceiveIcmpReply(pkt packet, env Environment)
+	ReceiveTimeExceeded(pkt packet, env Environment)
 }
 
 /*
@@ -118,6 +123,7 @@ type NetComponent interface {
 Node implementations
 ----------------------------------------------------
 */
+
 type Node interface {
 	GetNetInterface() netInterface
 	SendMessage(msg string, dest NetComponent, destNetInterface netInterface, env Environment)
@@ -173,15 +179,6 @@ func (n *node) ReceiveArpRequest(pkt packet) {
 	}
 }
 
-func (n *node) SendArpReply(pkt packet) packet {
-	srcHost := packetHost{
-		name: n.name,
-		ip:   n.netPort.ip,
-		mac:  n.netPort.mac,
-	}
-	return NewPacket(srcHost, pkt.src, ARP_REP, "", 8, 0, 0)
-}
-
 func (n *node) ReceiveIcmpRequest(pkt packet, env Environment) bool {
 	fmt.Printf("%v rbox %v : Received %v;\n", n.name, n.name, pkt.data)
 	return true
@@ -189,6 +186,18 @@ func (n *node) ReceiveIcmpRequest(pkt packet, env Environment) bool {
 
 func (n *node) ReceiveIcmpReply(pkt packet, env Environment) {
 	fmt.Printf("%v rbox %v : Received %v;\n", n.name, n.name, pkt.data)
+
+}
+
+func (n *node) ReceiveTimeExceeded(pkt packet, env Environment) {}
+
+func (n *node) SendArpReply(pkt packet) packet {
+	srcHost := packetHost{
+		name: n.name,
+		ip:   n.netPort.ip,
+		mac:  n.netPort.mac,
+	}
+	return NewPacket(srcHost, pkt.src, ARP_REP, "", 8, 0, 0)
 }
 
 func (n *node) SendIcmpReply(pkt packet, env Environment) packet {
@@ -231,7 +240,7 @@ func (n *node) SendMessage(msg string, dest NetComponent, destNetInterface netIn
 	}
 
 	pkt := createIcmpReq(n.name, dstName, n.netPort, dstNetPort, msg)
-	env.SendIcmpReq(n, n.netPort, dstNetPort, dstName, msg, pkt.ttl)
+	env.SendIcmpReq(n, n.netPort, dstNetPort, pkt)
 }
 
 /*
@@ -239,6 +248,7 @@ func (n *node) SendMessage(msg string, dest NetComponent, destNetInterface netIn
 Router implementations
 ----------------------------------------------------
 */
+
 type routerTableEntry struct {
 	netdest IP
 	nexthop IP
@@ -250,6 +260,7 @@ type routerPort struct {
 	netInterface
 }
 
+// NewRouterPort function creates a new port for a router
 func NewRouterPort(number uint8, ip string, mac MAC, mtu MTU) *routerPort {
 	netIp := NewIp(ip)
 	netInt := netInterface{
@@ -264,6 +275,10 @@ func NewRouterPort(number uint8, ip string, mac MAC, mtu MTU) *routerPort {
 	return port
 }
 
+type Router interface {
+	SendIcmpTimeExceeded(pkt packet, env Environment) packet
+}
+
 type router struct {
 	// Name of the router
 	name string
@@ -275,6 +290,13 @@ type router struct {
 	arpTable map[IP]MAC
 }
 
+/*
+----------------------------------------------------
+Basic functions for the router
+----------------------------------------------------
+*/
+
+// NewRouter creates a new router
 func NewRouter(name string) *router {
 	ports := make([]routerPort, 0)
 	routerTb := make([]*routerTableEntry, 0)
@@ -299,14 +321,6 @@ func (r *router) AddRouterTableEntry(entry *routerTableEntry) {
 	r.routerTable = append(r.routerTable, entry)
 }
 
-func (r *router) ReceiveArpRequest(pkt packet) {
-	_, hasSrcIp := r.arpTable[pkt.src.ip]
-
-	if !hasSrcIp {
-		r.arpTable[pkt.src.ip] = pkt.src.mac
-	}
-}
-
 func (r *router) GetPortByMac(mac MAC) routerPort {
 	rp, _ := fp.Find(r.ports, func(prt routerPort) bool {
 		return prt.mac == mac
@@ -321,6 +335,12 @@ func (r *router) GetPortByIp(ip IP) routerPort {
 	return rp.(routerPort)
 }
 
+/*
+----------------------------------------------------
+Router send functions implementation
+----------------------------------------------------
+*/
+
 func (r *router) SendArpReply(pkt packet) packet {
 	dstIp := pkt.dst.ip
 	dstPort := r.GetPortByIp(dstIp)
@@ -330,106 +350,6 @@ func (r *router) SendArpReply(pkt packet) packet {
 		mac:  dstPort.mac,
 	}
 	return NewPacket(srcHost, pkt.src, ARP_REP, "", 8, 0, 0)
-}
-
-func (r *router) ReceiveIcmpRequest(pkt packet, env Environment) bool {
-	// verify if the router can reach the network
-	entry, _ := fp.Find(r.routerTable, func(ent *routerTableEntry) bool {
-		return ent.netdest.IsSameNet(pkt.dst.ip)
-	})
-
-	rtEntry := entry.(*routerTableEntry)
-	defaultIp := *NewIp("0.0.0.0/0")
-
-	var destNetInterface netInterface
-	var routerNetPort netInterface
-	var destNetComp NetComponent
-
-	// retrieve the port that can reach the netork
-	port, _ := fp.Find(r.ports, func(p routerPort) bool {
-		return p.number == rtEntry.port
-	})
-	routerNetPort = port.(routerPort).netInterface
-
-	if rtEntry.nexthop == defaultIp {
-		destNetComp = env.GetNetComponentByIp(pkt.dst.ip)
-		destNetInterface = env.GetComponentNetInterfaceByIp(destNetComp, pkt.dst.ip)
-	} else {
-		destNetComp = env.GetNetComponentByIpOnly(rtEntry.nexthop)
-		destNetInterface = env.GetComponentNetInterfaceByIpOnly(destNetComp, rtEntry.nexthop)
-	}
-
-	// verify if the destination is known by the router
-	_, hasMacArpTable := r.arpTable[destNetInterface.ip]
-	if !hasMacArpTable {
-		pkt := createBroadcastArpReq(r.name, routerNetPort, destNetInterface.ip)
-		arpReply := env.SendArpReq(pkt)
-		r.ReceiveArpRequest(arpReply)
-	}
-
-	srcNetInterface := netInterface{
-		ip:  pkt.src.ip,
-		mac: routerNetPort.mac,
-		mtu: routerNetPort.mtu,
-	}
-	destNetInterface = netInterface{
-		ip:  pkt.dst.ip,
-		mac: destNetInterface.mac,
-		mtu: destNetInterface.mtu,
-	}
-
-	env.SendIcmpReq(r, srcNetInterface, destNetInterface, destNetComp.GetName(), pkt.data, pkt.ttl-1)
-	return false
-}
-
-func (r *router) ReceiveIcmpReply(pkt packet, env Environment) {
-	// verify if the router can reach the network
-	entry, _ := fp.Find(r.routerTable, func(ent *routerTableEntry) bool {
-		return ent.netdest.IsSameNet(pkt.dst.ip)
-	})
-
-	rtEntry := entry.(*routerTableEntry)
-	defaultIp := *NewIp("0.0.0.0/0")
-
-	var destNetInterface netInterface
-	var routerNetPort netInterface
-	var destNetComp NetComponent
-
-	// retrieve the port that can reach the netork
-	port, _ := fp.Find(r.ports, func(p routerPort) bool {
-		return p.number == rtEntry.port
-	})
-	routerNetPort = port.(routerPort).netInterface
-
-	if rtEntry.nexthop == defaultIp {
-		destNetComp = env.GetNetComponentByIp(pkt.dst.ip)
-		destNetInterface = env.GetComponentNetInterfaceByIp(destNetComp, pkt.dst.ip)
-	} else {
-		destNetComp = env.GetNetComponentByIpOnly(rtEntry.nexthop)
-		destNetInterface = env.GetComponentNetInterfaceByIpOnly(destNetComp, rtEntry.nexthop)
-	}
-
-	// verify if the destination is known by the router
-	_, hasMacArpTable := r.arpTable[destNetInterface.ip]
-	if !hasMacArpTable {
-		pkt := createBroadcastArpReq(r.name, routerNetPort, destNetInterface.ip)
-		arpReply := env.SendArpReq(pkt)
-		r.ReceiveArpRequest(arpReply)
-	}
-
-	srcHost := packetHost{
-		name: r.name,
-		ip:   pkt.src.ip,
-		mac:  routerNetPort.mac,
-	}
-	destHost := packetHost{
-		name: destNetComp.GetName(),
-		ip:   pkt.dst.ip,
-		mac:  destNetInterface.mac,
-	}
-	replyPacket := NewPacket(srcHost, destHost, pkt.typ, pkt.data, pkt.ttl-1, 0, 0)
-	// fmt.Printf("ICMP REply\n  pkt (%v)\n  dest comp (%v)\n\n", replyPacket, destNetComp)
-	env.SendIcmpReply(r, destNetComp, replyPacket)
 }
 
 func (r *router) SendIcmpReply(pkt packet, env Environment) packet {
@@ -480,11 +400,230 @@ func (r *router) SendIcmpReply(pkt packet, env Environment) packet {
 	return NewPacket(srcHost, dstHost, ICMP_REP, pkt.data, pkt.ttl, 0, 0)
 }
 
+func (r *router) SendIcmpTimeExceeded(pkt packet, env Environment) packet {
+	if pkt.typ == ICMP_TIME_EXCEEDED {
+		return pkt
+	}
+
+	// verify if the router can reach the network
+	entry, _ := fp.Find(r.routerTable, func(ent *routerTableEntry) bool {
+		return ent.netdest.IsSameNet(pkt.src.ip)
+	})
+
+	rtEntry := entry.(*routerTableEntry)
+	defaultIp := *NewIp("0.0.0.0/0")
+
+	var destNetInterface netInterface
+	var routerNetPort netInterface
+	var destNetComp NetComponent
+
+	// retrieve the port that can reach the netork
+	port, _ := fp.Find(r.ports, func(p routerPort) bool {
+		return p.number == rtEntry.port
+	})
+	routerNetPort = port.(routerPort).netInterface
+
+	if rtEntry.nexthop == defaultIp {
+		destNetComp = env.GetNetComponentByIp(pkt.src.ip)
+		destNetInterface = env.GetComponentNetInterfaceByIp(destNetComp, pkt.src.ip)
+	} else {
+		destNetComp = env.GetNetComponentByIpOnly(rtEntry.nexthop)
+		destNetInterface = env.GetComponentNetInterfaceByIpOnly(destNetComp, rtEntry.nexthop)
+	}
+
+	// verify if the destination is known by the router
+	_, hasMacArpTable := r.arpTable[destNetInterface.ip]
+	if !hasMacArpTable {
+		pkt := createBroadcastArpReq(r.name, routerNetPort, destNetInterface.ip)
+		arpReply := env.SendArpReq(pkt)
+		r.ReceiveArpRequest(arpReply)
+	}
+
+	srcHost := packetHost{
+		name: r.name,
+		ip:   routerNetPort.ip,
+		mac:  routerNetPort.mac,
+	}
+	dstHost := packetHost{
+		name: destNetComp.GetName(),
+		ip:   pkt.src.ip,
+		mac:  destNetInterface.mac,
+	}
+	return NewPacket(srcHost, dstHost, ICMP_TIME_EXCEEDED, "", 8, 0, 0)
+}
+
+/*
+----------------------------------------------------
+Router receive functions implementations
+----------------------------------------------------
+*/
+
+func (r *router) ReceiveArpRequest(pkt packet) {
+	_, hasSrcIp := r.arpTable[pkt.src.ip]
+
+	if !hasSrcIp {
+		r.arpTable[pkt.src.ip] = pkt.src.mac
+	}
+}
+
+func (r *router) ReceiveIcmpRequest(pkt packet, env Environment) bool {
+	// verify if the router can reach the network
+	entry, _ := fp.Find(r.routerTable, func(ent *routerTableEntry) bool {
+		return ent.netdest.IsSameNet(pkt.dst.ip)
+	})
+
+	rtEntry := entry.(*routerTableEntry)
+	defaultIp := *NewIp("0.0.0.0/0")
+
+	var destNetInterface netInterface
+	var routerNetPort netInterface
+	var destNetComp NetComponent
+
+	// retrieve the port that can reach the netork
+	port, _ := fp.Find(r.ports, func(p routerPort) bool {
+		return p.number == rtEntry.port
+	})
+	routerNetPort = port.(routerPort).netInterface
+
+	if rtEntry.nexthop == defaultIp {
+		destNetComp = env.GetNetComponentByIp(pkt.dst.ip)
+		destNetInterface = env.GetComponentNetInterfaceByIp(destNetComp, pkt.dst.ip)
+	} else {
+		destNetComp = env.GetNetComponentByIpOnly(rtEntry.nexthop)
+		destNetInterface = env.GetComponentNetInterfaceByIpOnly(destNetComp, rtEntry.nexthop)
+	}
+
+	// verify if the destination is known by the router
+	_, hasMacArpTable := r.arpTable[destNetInterface.ip]
+	if !hasMacArpTable {
+		pkt := createBroadcastArpReq(r.name, routerNetPort, destNetInterface.ip)
+		arpReply := env.SendArpReq(pkt)
+		r.ReceiveArpRequest(arpReply)
+	}
+
+	srcNetInterface := netInterface{
+		ip:  pkt.src.ip,
+		mac: routerNetPort.mac,
+		mtu: routerNetPort.mtu,
+	}
+	destNetInterface = netInterface{
+		ip:  pkt.dst.ip,
+		mac: destNetInterface.mac,
+		mtu: destNetInterface.mtu,
+	}
+	pkt.ttl--
+	pkt.src.mac = routerNetPort.mac
+	pkt.src.name = r.name
+	pkt.dst.mac = destNetInterface.mac
+	pkt.dst.name = destNetComp.GetName()
+	env.SendIcmpReq(r, srcNetInterface, destNetInterface, pkt)
+	return false
+}
+
+func (r *router) ReceiveIcmpReply(pkt packet, env Environment) {
+	// verify if the router can reach the network
+	entry, _ := fp.Find(r.routerTable, func(ent *routerTableEntry) bool {
+		return ent.netdest.IsSameNet(pkt.dst.ip)
+	})
+
+	rtEntry := entry.(*routerTableEntry)
+	defaultIp := *NewIp("0.0.0.0/0")
+
+	var destNetInterface netInterface
+	var routerNetPort netInterface
+	var destNetComp NetComponent
+
+	// retrieve the port that can reach the netork
+	port, _ := fp.Find(r.ports, func(p routerPort) bool {
+		return p.number == rtEntry.port
+	})
+	routerNetPort = port.(routerPort).netInterface
+
+	if rtEntry.nexthop == defaultIp {
+		destNetComp = env.GetNetComponentByIp(pkt.dst.ip)
+		destNetInterface = env.GetComponentNetInterfaceByIp(destNetComp, pkt.dst.ip)
+	} else {
+		destNetComp = env.GetNetComponentByIpOnly(rtEntry.nexthop)
+		destNetInterface = env.GetComponentNetInterfaceByIpOnly(destNetComp, rtEntry.nexthop)
+	}
+
+	// verify if the destination is known by the router
+	_, hasMacArpTable := r.arpTable[destNetInterface.ip]
+	if !hasMacArpTable {
+		pkt := createBroadcastArpReq(r.name, routerNetPort, destNetInterface.ip)
+		arpReply := env.SendArpReq(pkt)
+		r.ReceiveArpRequest(arpReply)
+	}
+
+	srcHost := packetHost{
+		name: r.name,
+		ip:   pkt.src.ip,
+		mac:  routerNetPort.mac,
+	}
+	destHost := packetHost{
+		name: destNetComp.GetName(),
+		ip:   pkt.dst.ip,
+		mac:  destNetInterface.mac,
+	}
+	replyPacket := NewPacket(srcHost, destHost, pkt.typ, pkt.data, pkt.ttl-1, 0, 0)
+	env.SendIcmpReply(r, destNetComp, replyPacket)
+}
+
+func (r *router) ReceiveTimeExceeded(pkt packet, env Environment) {
+	// verify if the router can reach the network
+	entry, _ := fp.Find(r.routerTable, func(ent *routerTableEntry) bool {
+		return ent.netdest.IsSameNet(pkt.dst.ip)
+	})
+
+	rtEntry := entry.(*routerTableEntry)
+	defaultIp := *NewIp("0.0.0.0/0")
+
+	var destNetInterface netInterface
+	var routerNetPort netInterface
+	var destNetComp NetComponent
+
+	// retrieve the port that can reach the netork
+	port, _ := fp.Find(r.ports, func(p routerPort) bool {
+		return p.number == rtEntry.port
+	})
+	routerNetPort = port.(routerPort).netInterface
+
+	if rtEntry.nexthop == defaultIp {
+		destNetComp = env.GetNetComponentByIp(pkt.dst.ip)
+		destNetInterface = env.GetComponentNetInterfaceByIp(destNetComp, pkt.dst.ip)
+	} else {
+		destNetComp = env.GetNetComponentByIpOnly(rtEntry.nexthop)
+		destNetInterface = env.GetComponentNetInterfaceByIpOnly(destNetComp, rtEntry.nexthop)
+	}
+
+	// verify if the destination is known by the router
+	_, hasMacArpTable := r.arpTable[destNetInterface.ip]
+	if !hasMacArpTable {
+		pkt := createBroadcastArpReq(r.name, routerNetPort, destNetInterface.ip)
+		arpReply := env.SendArpReq(pkt)
+		r.ReceiveArpRequest(arpReply)
+	}
+
+	srcHost := packetHost{
+		name: r.name,
+		ip:   pkt.src.ip,
+		mac:  routerNetPort.mac,
+	}
+	destHost := packetHost{
+		name: destNetComp.GetName(),
+		ip:   pkt.dst.ip,
+		mac:  destNetInterface.mac,
+	}
+	replyPacket := NewPacket(srcHost, destHost, pkt.typ, pkt.data, pkt.ttl-1, 0, 0)
+	env.SendIcmpTimeExceeded(r, replyPacket)
+}
+
 /*
 ----------------------------------------------------
 Environment implementations
 ----------------------------------------------------
 */
+
 type Environment interface {
 	AddNode(nd *node)
 	AddRouter(r *router)
@@ -498,8 +637,9 @@ type Environment interface {
 
 	SendMessage(msg string, ipSrc, ipDest IP) error
 	SendArpReq(pkt packet) packet
-	SendIcmpReq(srcComp NetComponent, srcNetPort, dstNetPort netInterface, dstName, data string, ttl uint8)
+	SendIcmpReq(srcComp NetComponent, srcNetPort, dstNetPort netInterface, pkt packet)
 	SendIcmpReply(src, dest NetComponent, pkt packet)
+	SendIcmpTimeExceeded(src NetComponent, pkt packet)
 }
 
 type environment struct {
@@ -639,33 +779,39 @@ func (e *environment) SendArpReq(pkt packet) packet {
 	return arpReply
 }
 
-func (e *environment) SendIcmpReq(srcComp NetComponent, srcNetPort, dstNetPort netInterface, dstName, data string, ttl uint8) {
-	pkt := createIcmpReq(srcComp.GetName(), dstName, srcNetPort, dstNetPort, data)
-	if ttl > 0 {
-		pkt.ttl = ttl
+func (e *environment) SendIcmpReq(src NetComponent, srcNetPort, dstNetPort netInterface, pkt packet) {
+	if pkt.ttl == 0 {
+		e.SendIcmpTimeExceeded(src, pkt)
+		return
 	}
 	logIcmpRequest(pkt)
-
-	if pkt.ttl == 0 {
-		panic("Request TTL 0 = TIME EXCEEDED")
-	}
 
 	dst := e.GetNetComponentByMac(pkt.dst.mac)
 
 	doReply := dst.ReceiveIcmpRequest(pkt, e)
 	if doReply {
-		e.SendIcmpReply(dst, srcComp, pkt)
+		e.SendIcmpReply(dst, src, pkt)
 	}
 }
 
 func (e *environment) SendIcmpReply(src, dest NetComponent, pkt packet) {
 	replyPkt := src.SendIcmpReply(pkt, e)
-	logIcmpReply(replyPkt)
+
 	if replyPkt.ttl == 0 {
-		panic("Reply TTL 0 = TIME EXCEEDED")
+		e.SendIcmpTimeExceeded(src, pkt)
+		return
 	}
+	logIcmpReply(replyPkt)
+
 	destination := e.GetNetComponentByMac(replyPkt.dst.mac)
 	destination.ReceiveIcmpReply(replyPkt, e)
+}
+
+func (e *environment) SendIcmpTimeExceeded(src NetComponent, pkt packet) {
+	timePkt := src.(Router).SendIcmpTimeExceeded(pkt, e)
+	logIcmpTimeExceeded(timePkt)
+	destination := e.GetNetComponentByMac(timePkt.dst.mac)
+	destination.ReceiveTimeExceeded(timePkt, e)
 }
 
 func (e *environment) GetDefaultGateway(n *node) *router {
@@ -727,6 +873,7 @@ func (e *environment) SendMessage(msg string, ipSrc, ipDest IP) error {
 Parse the file to create the environment
 ----------------------------------------------------
 */
+
 func findLabelIndex(lb string, list []string) (int, error) {
 	return fp.FindIndex(list, func(val string) bool {
 		return val == lb
@@ -809,6 +956,7 @@ func (e *environment) ParseLines(lines []string) {
 Run the Simulator
 ----------------------------------------------------
 */
+
 func Run(ctx *cli.Context) error {
 	args := &file.InputArgs{}
 
