@@ -159,7 +159,7 @@ func createIcmpReq(srcName, dstName string, srcNetPort, dstNetPort netInterface,
 	return NewPacket(srcHost, dstHost, ICMP_REQ, data, 8, 0, 0)
 }
 
-func logArpReq(pkt packet) {
+func logArpRequest(pkt packet) {
 	fmt.Printf(
 		"%v box %v : ETH (src=%v dst=%v) \\n ARP - Who has %v? Tell %v;\n",
 		pkt.src.name, pkt.src.name, pkt.src.mac, pkt.dst.mac,
@@ -167,7 +167,7 @@ func logArpReq(pkt packet) {
 	)
 }
 
-func logArpRep(pkt packet) {
+func logArpReply(pkt packet) {
 	fmt.Printf(
 		"%v => %v : ETH (src=%v dst=%v) \\n ARP - %v is at %v;\n",
 		pkt.src.name, pkt.dst.name, pkt.src.mac, pkt.dst.mac,
@@ -175,7 +175,7 @@ func logArpRep(pkt packet) {
 	)
 }
 
-func logIcmpReq(pkt packet) {
+func logIcmpRequest(pkt packet) {
 	fmt.Printf(
 		"%v => %v : ETH (src=%v dst=%v) \\n IP (src=%v dst=%v ttl=%v mf=%v off=%v) \\n ICMP - Echo request (data=%v);\n",
 		pkt.src.name, pkt.dst.name, pkt.src.mac, pkt.dst.mac,
@@ -183,7 +183,7 @@ func logIcmpReq(pkt packet) {
 	)
 }
 
-func logIcmpRep(pkt packet) {
+func logIcmpReply(pkt packet) {
 	fmt.Printf(
 		"%v => %v : ETH (src=%v dst=%v) \\n IP (src=%v dst=%v ttl=%v mf=%v off=%v) \\n ICMP - Echo reply (data=%v);\n",
 		pkt.src.name, pkt.dst.name, pkt.src.mac, pkt.dst.mac,
@@ -196,8 +196,8 @@ type NetComponent interface {
 	SendMessage(msg string, dest NetComponent, destNetInterface netInterface, env Environment)
 	SendArpReply(pkt packet) packet
 	ReceiveArpRequest(pkt packet)
-	SendIcmpReply(pkt packet) packet
-	ReceiveIcmpRequest(pkt packet, env Environment)
+	SendIcmpReply(pkt packet, env Environment) packet
+	ReceiveIcmpRequest(pkt packet, env Environment) bool
 	ReceiveIcmpReply(pkt packet, env Environment)
 }
 
@@ -264,15 +264,16 @@ func (n *node) SendArpReply(pkt packet) packet {
 	return NewPacket(srcHost, pkt.src, ARP_REP, "", 8, 0, 0)
 }
 
-func (n *node) ReceiveIcmpRequest(pkt packet, env Environment) {
+func (n *node) ReceiveIcmpRequest(pkt packet, env Environment) bool {
 	fmt.Printf("%v rbox %v : Received %v;\n", n.name, n.name, pkt.data)
+	return true
 }
 
 func (n *node) ReceiveIcmpReply(pkt packet, env Environment) {
 	fmt.Printf("%v rbox %v : Received %v;\n", n.name, n.name, pkt.data)
 }
 
-func (n *node) SendIcmpReply(pkt packet) packet {
+func (n *node) SendIcmpReply(pkt packet, env Environment) packet {
 	return NewPacket(pkt.dst, pkt.src, ICMP_REP, pkt.data, 8, 0, 0)
 }
 
@@ -294,7 +295,6 @@ func (n *node) SendMessage(msg string, dest NetComponent, destNetInterface netIn
 			mac: (prt.(routerPort)).mac,
 			mtu: (prt.(routerPort)).mtu,
 		}
-
 		dstName = rt.name
 		routerPortIp := (prt.(routerPort)).ip
 		arpTbIpSearch = routerPortIp
@@ -314,11 +314,13 @@ func (n *node) SendMessage(msg string, dest NetComponent, destNetInterface netIn
 
 	pkt := createIcmpReq(n.name, dstName, n.netPort, dstNetPort, msg)
 	lastIcmpPacket = pkt
-	icmpReply := env.SendIcmpReq(pkt)
-	if icmpReply != nil {
-		lastIcmpPacket = *icmpReply
-		n.ReceiveIcmpReply(*icmpReply, env)
-	}
+	env.SendIcmpReq(n, n.netPort, dstNetPort, dstName, msg)
+
+	// icmpReply :=
+	// if icmpReply != nil {
+	// 	lastIcmpPacket = *icmpReply
+	// 	n.ReceiveIcmpReply(*icmpReply, env)
+	// }
 }
 
 type routerTableEntry struct {
@@ -414,24 +416,95 @@ func (r *router) SendArpReply(pkt packet) packet {
 	return NewPacket(srcHost, pkt.src, ARP_REP, "", 8, 0, 0)
 }
 
-func (r *router) ReceiveIcmpRequest(pkt packet, env Environment) {
-	port := r.GetPortByMac(pkt.dst.mac)
-	_ = env.SendMessage(pkt.data, port.ip, pkt.dst.ip)
+func (r *router) ReceiveIcmpRequest(pkt packet, env Environment) bool {
+	// verify if the router can reach the network
+	entry, _ := fp.Find(r.routerTable, func(ent *routerTableEntry) bool {
+		return ent.netdest.IsSameNet(pkt.dst.ip)
+	})
+
+	if entry == nil {
+		panic("Invalid network. No entry in the router table")
+	}
+
+	// retrieve the port that can reach the netork
+	port, _ := fp.Find(r.ports, func(p routerPort) bool {
+		return p.number == entry.(*routerTableEntry).port
+	})
+	routerNetPort := port.(routerPort).netInterface
+	destNetComp := env.GetNetComponentByIp(pkt.dst.ip)
+	destNetInterface := env.GetComponentNetInterfaceByIp(destNetComp, pkt.dst.ip)
+	srcNetInterface := netInterface{
+		ip:  pkt.src.ip,
+		mac: routerNetPort.mac,
+		mtu: routerNetPort.mtu,
+	}
+
+	env.SendIcmpReq(r, srcNetInterface, destNetInterface, destNetComp.GetName(), pkt.data)
+	return false
 }
 
 func (r *router) ReceiveIcmpReply(pkt packet, env Environment) {
-	port := r.GetPortByMac(pkt.dst.mac)
-	_ = env.SendMessage(pkt.data, port.ip, pkt.dst.ip)
-}
+	// verify if the router can reach the network
+	entry, _ := fp.Find(r.routerTable, func(ent *routerTableEntry) bool {
+		return ent.netdest.IsSameNet(pkt.dst.ip)
+	})
 
-func (r *router) SendIcmpReply(pkt packet) packet {
-	port := r.GetPortByMac(pkt.dst.mac)
+	if entry == nil {
+		panic("Invalid network. No entry in the router table")
+	}
+
+	// retrieve the port that can reach the netork
+	port, _ := fp.Find(r.ports, func(p routerPort) bool {
+		return p.number == entry.(*routerTableEntry).port
+	})
+	routerNetPort := port.(routerPort).netInterface
+	destNetComp := env.GetNetComponentByIp(pkt.dst.ip)
+	destNetInterface := env.GetComponentNetInterfaceByIp(destNetComp, pkt.dst.ip)
+
 	srcHost := packetHost{
 		name: r.name,
-		ip:   port.ip,
-		mac:  port.mac,
+		ip:   pkt.src.ip,
+		mac:  routerNetPort.mac,
 	}
-	return NewPacket(srcHost, pkt.src, ICMP_REP, pkt.data, 8, 0, 0)
+	destHost := packetHost{
+		name: destNetComp.GetName(),
+		ip:   destNetInterface.ip,
+		mac:  destNetInterface.mac,
+	}
+	replyPacket := NewPacket(srcHost, destHost, pkt.typ, pkt.data, pkt.ttl-1, 0, 0)
+
+	env.SendIcmpReply(r, destNetComp, replyPacket)
+}
+
+func (r *router) SendIcmpReply(pkt packet, env Environment) packet {
+	// verify if the router can reach the network
+	entry, _ := fp.Find(r.routerTable, func(ent *routerTableEntry) bool {
+		return ent.netdest.IsSameNet(pkt.dst.ip)
+	})
+
+	if entry == nil {
+		panic("Invalid network. No entry in the router table")
+	}
+
+	// retrieve the port that can reach the netork
+	port, _ := fp.Find(r.ports, func(p routerPort) bool {
+		return p.number == entry.(*routerTableEntry).port
+	})
+	routerNetPort := port.(routerPort).netInterface
+	destNetComp := env.GetNetComponentByIp(pkt.dst.ip)
+	destNetInterface := env.GetComponentNetInterfaceByIp(destNetComp, pkt.dst.ip)
+
+	srcHost := packetHost{
+		name: r.name,
+		ip:   pkt.src.ip,
+		mac:  routerNetPort.mac,
+	}
+	dstHost := packetHost{
+		ip:   pkt.dst.ip,
+		mac:  destNetInterface.mac,
+		name: destNetComp.GetName(),
+	}
+	return NewPacket(srcHost, dstHost, ICMP_REP, pkt.data, 8, 0, 0)
 }
 
 func (r *router) SendMessage(msg string, dest NetComponent, destNetInterface netInterface, env Environment) {
@@ -462,11 +535,7 @@ func (r *router) SendMessage(msg string, dest NetComponent, destNetInterface net
 	pkt.src.ip = lastIcmpPacket.src.ip
 	pkt.ttl--
 	lastIcmpPacket = pkt
-	icmpReply := env.SendIcmpReq(pkt)
-	if icmpReply != nil {
-		lastIcmpPacket = *icmpReply
-		r.ReceiveIcmpRequest(*icmpReply, env)
-	}
+	env.SendIcmpReq(r, networkPort, destNetInterface, dest.GetName(), msg)
 }
 
 type Environment interface {
@@ -474,11 +543,14 @@ type Environment interface {
 	AddRouter(r *router)
 	GetDefaultGateway(n *node) *router
 	GetNetComponentByName(name string) NetComponent
+	GetNetComponentByIp(ip IP) NetComponent
+	GetComponentNetInterfaceByIp(comp NetComponent, ip IP) netInterface
 	ParseLines(lines []string)
 
 	SendMessage(msg string, ipSrc, ipDest IP) error
 	SendArpReq(pkt packet) packet
-	SendIcmpReq(pkt packet) *packet
+	SendIcmpReq(srcComp NetComponent, srcNetPort, dstNetPort netInterface, dstName, data string)
+	SendIcmpReply(src, dest NetComponent, pkt packet)
 }
 
 type environment struct {
@@ -597,25 +669,37 @@ func (e *environment) GetNetComponentByName(name string) NetComponent {
 }
 
 func (e *environment) SendArpReq(pkt packet) packet {
-	logArpReq(pkt)
+	logArpRequest(pkt)
 	dst := e.GetNetComponentByIp(pkt.dst.ip)
 	dst.ReceiveArpRequest(pkt)
 	arpReply := dst.SendArpReply(pkt)
-	logArpRep(arpReply)
+	logArpReply(arpReply)
 	return arpReply
 }
 
-func (e *environment) SendIcmpReq(pkt packet) *packet {
-	logIcmpReq(pkt)
+func (e *environment) SendIcmpReq(srcComp NetComponent, srcNetPort, dstNetPort netInterface, dstName, data string) {
+	pkt := createIcmpReq(srcComp.GetName(), dstName, srcNetPort, dstNetPort, data)
+	logIcmpRequest(pkt)
 	dst := e.GetNetComponentByMac(pkt.dst.mac)
-	dst.ReceiveIcmpRequest(pkt, e)
-	// the origin component doesnt set the icmp reply
-	if dst.GetName() != globalSrcNode.GetName() {
-		icmpRep := dst.SendIcmpReply(pkt)
-		logIcmpRep(icmpRep)
-		return &icmpRep
+
+	if pkt.dst.name == pkt.src.name {
+		return
 	}
-	return nil
+
+	doReply := dst.ReceiveIcmpRequest(pkt, e)
+	if doReply {
+		e.SendIcmpReply(dst, srcComp, pkt)
+	}
+}
+
+func (e *environment) SendIcmpReply(src, dest NetComponent, pkt packet) {
+	replyPkt := src.SendIcmpReply(pkt, e)
+	logIcmpReply(replyPkt)
+	destination := e.GetNetComponentByMac(replyPkt.dst.mac)
+	if pkt.dst.name == pkt.src.name {
+		return
+	}
+	destination.ReceiveIcmpReply(replyPkt, e)
 }
 
 func (e *environment) GetDefaultGateway(n *node) *router {
