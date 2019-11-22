@@ -102,9 +102,6 @@ func createIcmpReq(srcName, dstName string, srcNetPort, dstNetPort netInterface,
 }
 
 func SetHosts(pkts []*packet, src, dest *packetHost) {
-	// fmt.Printf("Set hosts\n")
-	// fmt.Printf("  src (%v)\n", src)
-	// fmt.Printf("  dst (%v)\n\n", dest)
 	for _, pkt := range pkts {
 		if src != nil {
 			pkt.src = *src
@@ -135,7 +132,6 @@ func Fragment(p *packet, mtu MTU) []*packet {
 	})
 
 	frags := fragments.([]*packet)
-
 	return frags
 }
 
@@ -580,7 +576,7 @@ func (r *router) SendIcmpTimeExceeded(pkt []*packet, env Environment) []*packet 
 		ip:   GetPktsSrc(pkt).ip,
 		mac:  destNetInterface.mac,
 	}
-	timePkt := NewPacket(srcHost, dstHost, ICMP_TIME_EXCEEDED, "", 8, 0, 0)
+	timePkt := NewPacket(srcHost, dstHost, ICMP_TIME_EXCEEDED, DefragmentData(pkt), 8, 0, 0)
 	return Fragment(&timePkt, destNetInterface.mtu)
 }
 
@@ -756,19 +752,27 @@ func (r *router) ReceiveTimeExceeded(pkt []*packet, env Environment) {
 		r.ReceiveArpRequest(arpReply)
 	}
 
-	srcHost := packetHost{
+	srcHost := &packetHost{
 		name: r.name,
 		ip:   GetPktsSrc(pkt).ip,
 		mac:  routerNetPort.mac,
 	}
-	destHost := packetHost{
+	destHost := &packetHost{
 		name: destNetComp.GetName(),
 		ip:   GetPktsDest(pkt).ip,
 		mac:  destNetInterface.mac,
 	}
-	replyPacket := NewPacket(srcHost, destHost, GetPktsType(pkt), DefragmentData(pkt), GetPktsTTL(pkt), 0, 0)
-	pkts := Fragment(&replyPacket, destNetInterface.mtu)
+	list, _ := fp.Map(pkt, func(pkt *packet) []*packet {
+		return Fragment(pkt, destNetInterface.mtu)
+	})
+	pktList := list.([][]*packet)
+
+	var pkts []*packet = make([]*packet, 0)
+	for _, p := range pktList {
+		pkts = append(pkts, p...)
+	}
 	DecrementPktsTTL(pkts)
+	SetHosts(pkts, srcHost, destHost)
 	env.SendIcmpTimeExceeded(r, pkts)
 }
 

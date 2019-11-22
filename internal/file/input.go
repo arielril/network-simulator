@@ -3,6 +3,7 @@ package file
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/asaskevich/govalidator"
 	"github.com/urfave/cli"
@@ -21,16 +22,14 @@ func ValidateInputeArgs(args *InputArgs, ctx *cli.Context) error {
 	}
 
 	args.Topology = ctx.Args().Get(0)
-	args.SrcNode = ctx.Args().Get(1)
-	args.DstNode = ctx.Args().Get(2)
+	args.SrcNode = strings.ToUpper(ctx.Args().Get(1))
+	args.DstNode = strings.ToUpper(ctx.Args().Get(2))
 	args.Msg = ctx.Args().Get(3)
 
 	_, err := govalidator.ValidateStruct(args)
 
 	if err != nil {
-		return errors.New(
-			fmt.Sprintf("Falied to parse args: %v", err),
-		)
+		return fmt.Errorf("Falied to parse args: %v", err)
 	}
 
 	return nil

@@ -17,7 +17,7 @@ func configCli(app *cli.App) {
 func getCliApp() *cli.App {
 	app := cli.NewApp()
 	app.Name = "Network Simulator"
-	app.Usage = "Let's you run a ping simulation inside a topology"
+	app.Usage = "Let's you run a simulation inside a topology. Two nodes sending messages"
 	app.UsageText = "simulador [path/to/topology/file] [src_node] [dst_node] [message]"
 	app.Action = simulator.Run
 
