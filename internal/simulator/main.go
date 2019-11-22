@@ -12,6 +12,9 @@ import (
 	fp "github.com/novalagung/gubrak"
 )
 
+type MAC string
+type MTU uint8
+
 const (
 	UNKOWN_MAC         MAC    = "FF:FF:FF:FF:FF:FF"
 	NODE_LABEL         string = "#NODE"
@@ -29,80 +32,17 @@ const (
 	ICMP_REP
 )
 
-var lastIcmpPacket packet
-var globalSrcNode NetComponent
-
-type MAC string
-type MTU uint8
-type IP struct {
-	ip     string
-	prefix uint8
-}
-
-func NewIp(ip string) *IP {
-	ipSplit := strings.Split(ip, "/")
-	var prefix uint8
-
-	if len(ipSplit) == 1 {
-		prefix = 0
-	} else {
-		pref, _ := strconv.ParseUint(ipSplit[1], 10, 8)
-		prefix = uint8(pref)
-	}
-
-	netIp := &IP{
-		ip:     ipSplit[0],
-		prefix: prefix,
-	}
-	return netIp
-}
-
-func (ip IP) ToBit() uint32 {
-	list, err := fp.Map(
-		strings.Split(ip.ip, "."),
-		func(part string) uint64 {
-			val, _ := strconv.ParseUint(part, 10, 32)
-			return val
-		},
-	)
-
-	if err != nil {
-		panic("Failed to convert IP")
-	}
-	ipList := list.([]uint64)
-	bits := fmt.Sprintf(
-		"%08b%08b%08b%08b",
-		ipList[0],
-		ipList[1],
-		ipList[2],
-		ipList[3],
-	)
-	res, _ := strconv.ParseUint(bits, 2, 32)
-	return uint32(res)
-}
-
-func (ip IP) IsSameNet(ipDest IP) bool {
-	ipSrcBit := ip.ToBit()
-	ipDestBit := ipDest.ToBit()
-	fst := MASK & (ipSrcBit & (MASK << (32 - ip.prefix)))
-	snd := MASK & (fst | (MASK >> ip.prefix))
-
-	return ipDestBit >= fst && ipDestBit <= snd
-}
-
-func (ip IP) ToString() string {
-	return fmt.Sprintf(
-		"%v/%v",
-		ip.ip, ip.prefix,
-	)
-}
-
 type netInterface struct {
 	ip  IP
 	mac MAC
 	mtu MTU
 }
 
+/*
+----------------------------------------------------
+Packet implementation
+----------------------------------------------------
+*/
 type packetHost struct {
 	name string
 	mac  MAC
@@ -159,41 +99,13 @@ func createIcmpReq(srcName, dstName string, srcNetPort, dstNetPort netInterface,
 	return NewPacket(srcHost, dstHost, ICMP_REQ, data, 8, 0, 0)
 }
 
-func logArpRequest(pkt packet) {
-	fmt.Printf(
-		"%v box %v : ETH (src=%v dst=%v) \\n ARP - Who has %v? Tell %v;\n",
-		pkt.src.name, pkt.src.name, pkt.src.mac, pkt.dst.mac,
-		pkt.dst.ip.ip, pkt.src.ip.ip,
-	)
-}
-
-func logArpReply(pkt packet) {
-	fmt.Printf(
-		"%v => %v : ETH (src=%v dst=%v) \\n ARP - %v is at %v;\n",
-		pkt.src.name, pkt.dst.name, pkt.src.mac, pkt.dst.mac,
-		pkt.src.ip.ip, pkt.src.mac,
-	)
-}
-
-func logIcmpRequest(pkt packet) {
-	fmt.Printf(
-		"%v => %v : ETH (src=%v dst=%v) \\n IP (src=%v dst=%v ttl=%v mf=%v off=%v) \\n ICMP - Echo request (data=%v);\n",
-		pkt.src.name, pkt.dst.name, pkt.src.mac, pkt.dst.mac,
-		pkt.src.ip.ip, pkt.dst.ip.ip, pkt.ttl, pkt.mf, pkt.off, pkt.data,
-	)
-}
-
-func logIcmpReply(pkt packet) {
-	fmt.Printf(
-		"%v => %v : ETH (src=%v dst=%v) \\n IP (src=%v dst=%v ttl=%v mf=%v off=%v) \\n ICMP - Echo reply (data=%v);\n",
-		pkt.src.name, pkt.dst.name, pkt.src.mac, pkt.dst.mac,
-		pkt.src.ip.ip, pkt.dst.ip.ip, pkt.ttl, pkt.mf, pkt.off, pkt.data,
-	)
-}
-
+/*
+----------------------------------------------------
+Net component
+----------------------------------------------------
+*/
 type NetComponent interface {
 	GetName() string
-	SendMessage(msg string, dest NetComponent, destNetInterface netInterface, env Environment)
 	SendArpReply(pkt packet) packet
 	ReceiveArpRequest(pkt packet)
 	SendIcmpReply(pkt packet, env Environment) packet
@@ -201,8 +113,14 @@ type NetComponent interface {
 	ReceiveIcmpReply(pkt packet, env Environment)
 }
 
+/*
+----------------------------------------------------
+Node implementations
+----------------------------------------------------
+*/
 type Node interface {
 	GetNetInterface() netInterface
+	SendMessage(msg string, dest NetComponent, destNetInterface netInterface, env Environment)
 }
 
 type node struct {
@@ -316,6 +234,11 @@ func (n *node) SendMessage(msg string, dest NetComponent, destNetInterface netIn
 	env.SendIcmpReq(n, n.netPort, dstNetPort, dstName, msg, pkt.ttl)
 }
 
+/*
+----------------------------------------------------
+Router implementations
+----------------------------------------------------
+*/
 type routerTableEntry struct {
 	netdest IP
 	nexthop IP
@@ -557,37 +480,11 @@ func (r *router) SendIcmpReply(pkt packet, env Environment) packet {
 	return NewPacket(srcHost, dstHost, ICMP_REP, pkt.data, pkt.ttl, 0, 0)
 }
 
-func (r *router) SendMessage(msg string, dest NetComponent, destNetInterface netInterface, env Environment) {
-	// verify if the router can reach the network
-	entry, _ := fp.Find(r.routerTable, func(e *routerTableEntry) bool {
-		return e.netdest.IsSameNet(destNetInterface.ip)
-	})
-
-	if entry == nil {
-		panic("Invalid network. No entry in the router table")
-	}
-
-	// retrieve the port that can reach the netork
-	port, _ := fp.Find(r.ports, func(p routerPort) bool {
-		return p.number == entry.(*routerTableEntry).port
-	})
-	networkPort := port.(routerPort).netInterface
-
-	// verify if the destination is known by the router
-	_, hasMacArpTable := r.arpTable[destNetInterface.ip]
-	if !hasMacArpTable {
-		pkt := createBroadcastArpReq(r.name, networkPort, destNetInterface.ip)
-		arpReply := env.SendArpReq(pkt)
-		r.ReceiveArpRequest(arpReply)
-	}
-
-	pkt := createIcmpReq(r.name, dest.GetName(), networkPort, destNetInterface, msg)
-	pkt.src.ip = lastIcmpPacket.src.ip
-	pkt.ttl--
-	lastIcmpPacket = pkt
-	env.SendIcmpReq(r, networkPort, destNetInterface, dest.GetName(), msg, pkt.ttl)
-}
-
+/*
+----------------------------------------------------
+Environment implementations
+----------------------------------------------------
+*/
 type Environment interface {
 	AddNode(nd *node)
 	AddRouter(r *router)
@@ -747,8 +644,12 @@ func (e *environment) SendIcmpReq(srcComp NetComponent, srcNetPort, dstNetPort n
 	if ttl > 0 {
 		pkt.ttl = ttl
 	}
-
 	logIcmpRequest(pkt)
+
+	if pkt.ttl == 0 {
+		panic("Request TTL 0 = TIME EXCEEDED")
+	}
+
 	dst := e.GetNetComponentByMac(pkt.dst.mac)
 
 	doReply := dst.ReceiveIcmpRequest(pkt, e)
@@ -760,6 +661,9 @@ func (e *environment) SendIcmpReq(srcComp NetComponent, srcNetPort, dstNetPort n
 func (e *environment) SendIcmpReply(src, dest NetComponent, pkt packet) {
 	replyPkt := src.SendIcmpReply(pkt, e)
 	logIcmpReply(replyPkt)
+	if replyPkt.ttl == 0 {
+		panic("Reply TTL 0 = TIME EXCEEDED")
+	}
 	destination := e.GetNetComponentByMac(replyPkt.dst.mac)
 	destination.ReceiveIcmpReply(replyPkt, e)
 }
@@ -814,10 +718,15 @@ func (e *environment) SendMessage(msg string, ipSrc, ipDest IP) error {
 	}
 
 	destNetInterface := e.GetComponentNetInterfaceByIp(dst, ipDest)
-	src.SendMessage(msg, dst, destNetInterface, e)
+	src.(Node).SendMessage(msg, dst, destNetInterface, e)
 	return nil
 }
 
+/*
+----------------------------------------------------
+Parse the file to create the environment
+----------------------------------------------------
+*/
 func findLabelIndex(lb string, list []string) (int, error) {
 	return fp.FindIndex(list, func(val string) bool {
 		return val == lb
@@ -895,6 +804,11 @@ func (e *environment) ParseLines(lines []string) {
 	}
 }
 
+/*
+----------------------------------------------------
+Run the Simulator
+----------------------------------------------------
+*/
 func Run(ctx *cli.Context) error {
 	args := &file.InputArgs{}
 
@@ -909,7 +823,6 @@ func Run(ctx *cli.Context) error {
 
 	src := env.GetNetComponentByName(args.SrcNode)
 	ipSrc := src.(Node).GetNetInterface()
-	globalSrcNode = src
 
 	dest := env.GetNetComponentByName(args.DstNode)
 	ipDest := dest.(Node).GetNetInterface()
