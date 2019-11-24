@@ -122,11 +122,6 @@ func Fragment(p *packet, mtu MTU) []*packet {
 		var off uint8 = p.off + (uint8(mtu) * uint8(i))
 		var mf uint8
 
-		// TODO fix mf
-		if off+uint8(len(chunk)) < uint8(len(p.data)) {
-			mf = 1
-		}
-
 		pk := NewPacket(p.src, p.dst, p.typ, strings.Join(chunk, ""), p.ttl, mf, off)
 		return &pk
 	})
